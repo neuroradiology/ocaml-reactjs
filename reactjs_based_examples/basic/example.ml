@@ -1,3 +1,5 @@
+open Reactjs.Types
+
 let example_application = Reactjs.(
     make_class_spec
       ~initial_state:(fun ~this ->
@@ -30,12 +32,14 @@ let example_application = Reactjs.(
          let message = Printf.sprintf
              "React has been successfully running for %f seconds" seconds
          in
-         DOM.make ~tag:`p [Text message]
+         make ~tag:`p [Text message]
       )
     |> create_class
   )
 
+
 let _ = Reactjs.(
+    let open Helpers in
     let example_app_factory = create_factory example_application in
     let start = (new%js Js.date_now)##getTime in
     set_interval

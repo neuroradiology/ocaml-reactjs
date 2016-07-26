@@ -1,9 +1,5 @@
 open StdLabels
 
-type 'a javascript_object = 'a Js.t
-
-type 'a component_api = (<isMounted : bool Js.t Js.meth; .. > as 'a) Js.t
-
 module Infix = struct
 
   let ( !@ ) = Js.wrap_meth_callback
@@ -52,12 +48,94 @@ module Helpers = struct
       (Js.Unsafe.(meth_call (get thing field) "toString" [||]))
   let real_type_name (o : 'a Js.t) =
     Infix.(!&((o <!> "constructor") <!> "name"))
-
 end
 
-include Helpers
+module rec Types : sig
 
-module Low_level_bindings = struct
+  type tag = [`a | `abbr | `address | `area | `article | `aside | `audio |
+              `b | `base | `bdi | `bdo | `big | `blockquote | `body |
+              `br | `button | `canvas | `caption | `cite | `code |
+              `col | `colgroup | `data | `datalist | `dd | `del |
+              `details | `dfn | `dialog | `div | `dl | `dt | `em |
+              `emded | `fieldset | `figcaption | `figure | `footer |
+              `form | `h1 | `h2 | `h3 | `h4 | `h5 | `h6 | `head | `header |
+              `hgroup | `hr | `html | `i | `iframe | `img | `input |
+              `ins | `kbd | `keygen | `label | `legend | `li | `link |
+              `main | `map | `mark | `menu | `menuitem | `meta | `meter |
+              `nav | `noscript |
+              `object_ [@printer fun fmt -> fprintf fmt "`object"] |
+              `ol | `optgroup | `option | `output | `p | `param | `picture |
+              `pre | `progress | `q | `rp | `rt | `ruby | `s | `samp |
+              `script | `section | `select | `small | `source | `span |
+              `strong | `style | `sub | `summary | `sup | `table |
+              `tbody | `td | `textarea | `tfoot | `th | `thead |
+              `time | `title | `tr | `track | `u | `ul | `var | `video |
+              `wbr | `circle | `clipPath | `defs | `ellipse | `g |
+              `image | `line | `linearGradient | `mask | `path |
+              `pattern | `polygon | `polyline | `radialGradient |
+              `rect | `stop | `svg | `text | `tspan ] [@@deriving show]
+
+  type 'a javascript_object = 'a Js.t
+
+  type 'a component_api = (
+    <
+      isMounted : bool Js.t Js.meth;
+
+      .. > as 'a) Js.t
+
+  type 'a elem_spec =
+    (<className: Js.js_string Js.t Js.readonly_prop; .. > as 'a ) Js.t
+
+  type element_spec = { class_name: string option; } [@@deriving make]
+
+  type react_node =
+    | Text of string
+    | Elem of Bindings.react_element Js.t
+
+  type tree = react_node list
+
+  type ('this,
+        'initial_state,
+        'default_props,
+        'prop_types,
+        'static_functions,
+        'next_props,
+        'next_state,
+        'prev_props,
+        'prev_state,
+        'props,
+        'mixin) class_spec =
+    { render:
+        this:'this component_api ->
+        Bindings.react_element Js.t; [@main]
+          initial_state : (this:'this component_api -> 'initial_state Js.t) option;
+        default_props : (this:'this component_api -> 'default_props Js.t) option;
+        prop_types : 'prop_types Js.t option;
+        mixins : 'mixin Js.t list option;
+        statics : 'static_functions Js.t option;
+        display_name : string option;
+        component_will_mount : (this:'this Js.t -> unit) option;
+        component_did_mount : (this:'this Js.t -> unit) option;
+        component_will_receive_props :
+          (this:'this Js.t -> next_prop:'next_props Js.t -> unit) option;
+        should_component_update :
+          (this:'this Js.t ->
+           next_prop:'next_props Js.t ->
+           next_state:'next_state Js.t -> bool Js.t) option;
+        component_will_update :
+          (this:'this Js.t ->
+           next_prop:'next_props Js.t ->
+           next_state:'next_state Js.t -> unit) option;
+        component_did_update :
+          (this:'this Js.t ->
+           prev_prop:'prev_props Js.t ->
+           prev_state:'prev_state Js.t -> unit) option;
+        component_will_unmount : (this:'this Js.t -> unit) option;
+    } [@@deriving make]
+
+end = Types
+
+and Bindings : sig
 
   class type react_dom_server = object
     method renderToString :
@@ -82,7 +160,7 @@ module Low_level_bindings = struct
 
   and ['this] react = object
 
-    constraint 'this = _ component_api
+    constraint 'this = _ Types.component_api
 
     method createElement_withString :
       Js.js_string Js.t -> react_element Js.t Js.meth
@@ -157,86 +235,37 @@ module Low_level_bindings = struct
 
   end
 
-  let (__react, __reactDOM, __reactDOMServer) :
-    'react Js.t * 'react_dom Js.t * react_dom_server Js.t
-    = Js.Unsafe.(
-      [%require_or_default "react" global##.React],
-      [%require_or_default "react-dom" global##.ReactDOM],
-      [%require_or_default "react-dom/server" global##.dummy]
-    )
+end = Bindings
 
-  let react :
-    'this .
-      (< isMounted : bool Js.t Js.meth; .. > as 'this)
-      component_api react Js.t
-    = __react
 
-  let react_dom = __reactDOM
+let __react : 'a Js.t =
+  Js.Unsafe.([%require_or_default "react" global##.React])
 
-  (* Only makes sense on the server, hence the unit *)
-  let react_dom_server : unit -> react_dom_server Js.t =
-    fun () -> __reactDOMServer
+let react :
+  'this.
+    (< isMounted : bool Js.t Js.meth; .. > as 'this) Types.component_api
+    Bindings.react Js.t
+  = __react
 
-end
 
-type element_spec = { class_name: string option; } [@@deriving make]
+let react_dom : Bindings.react_dom Js.t
+  =
+  Js.Unsafe.([%require_or_default "react-dom" global##.ReactDOM])
 
-type react_node =
-  | Text of string
-  | Elem of Low_level_bindings.react_element Js.t
-  (* | Fragment : _ react_node list -> _ react_node *)
-
-type tree = react_node list
-
-type ('this,
-      'initial_state,
-      'default_props,
-      'prop_types,
-      'static_functions,
-      'next_props,
-      'next_state,
-      'prev_props,
-      'prev_state,
-      'props,
-      'mixin) class_spec =
-  { render:
-      this:'this component_api ->
-      Low_level_bindings.react_element Js.t; [@main]
-    initial_state : (this:'this component_api -> 'initial_state Js.t) option;
-    default_props : (this:'this component_api -> 'default_props Js.t) option;
-    prop_types : 'prop_types Js.t option;
-    mixins : 'mixin Js.t list option;
-    statics : 'static_functions Js.t option;
-    display_name : string option;
-    component_will_mount : (this:'this Js.t -> unit) option;
-    component_did_mount : (this:'this Js.t -> unit) option;
-    component_will_receive_props :
-      (this:'this Js.t -> next_prop:'next_props Js.t -> unit) option;
-    should_component_update :
-      (this:'this Js.t ->
-       next_prop:'next_props Js.t ->
-       next_state:'next_state Js.t -> bool Js.t) option;
-    component_will_update :
-      (this:'this Js.t ->
-       next_prop:'next_props Js.t ->
-       next_state:'next_state Js.t -> unit) option;
-    component_did_update :
-      (this:'this Js.t ->
-       prev_prop:'prev_props Js.t ->
-       prev_state:'prev_state Js.t -> unit) option;
-    component_will_unmount : (this:'this Js.t -> unit) option;
-  } [@@deriving make]
+(* Only makes sense on the server, hence the unit *)
+let react_dom_server : unit -> Bindings.react_dom_server Js.t =
+  fun () -> [%require "react-dom/server"]
 
 let create_element :
-  ?element_opts:element_spec ->
+  ?element_opts:Types.element_spec ->
   string ->
-  tree ->
-  Low_level_bindings.react_element Js.t
+  Types.tree ->
+  Bindings.react_element Js.t
   = fun ?element_opts elem_name children -> Js.Unsafe.(
       let g =
         children |> List.map ~f:(function
-            | Elem e -> inject e
-            | Text s -> Js.string s |> inject
+            | Types.Elem e -> inject e
+            | Types.Text s -> Js.string s |> inject
             (* | Fragment l ->  *)
           )
       in
@@ -248,25 +277,27 @@ let create_element :
           | Some spec ->
             inject (object%js(self)
               val className =
-              Js.Opt.(map (option spec.class_name) Js.string)
-          end)
-      |];
-      Array.of_list g
-    ]
-    |> Array.concat
-    |> Js.Unsafe.meth_call Low_level_bindings.__react "createElement"
-  )
+                Js.Opt.(map (option spec.class_name) Js.string)
+            end)
+        |];
+        Array.of_list g
+      ]
+      |> Array.concat
+      |> Js.Unsafe.meth_call react "createElement"
+    )
 
 let create_element_from_class class_ =
-  Low_level_bindings.react##createElement_WithReactClass class_ Js.null
+  react##createElement_WithReactClass class_ Js.null
 
 let create_factory :
-  Low_level_bindings.react_class Js.t ->
-  (props:'a Js.t -> Low_level_bindings.react_element Js.t) = fun c ->
-  let call_me = Low_level_bindings.react##createFactory c in
+  Bindings.react_class Js.t ->
+  (props:'a Js.t -> Bindings.react_element Js.t) = fun c ->
+  let call_me = react##createFactory c in
   fun ~props -> Js.Unsafe.fun_call call_me [|Js.Unsafe.inject props|]
 
-let create_class class_opts = let open Js.Optdef in
+let create_class class_opts =
+  let open Js.Optdef in
+  let open Types in
   let comp = (object%js
     (* Component Specifications *)
     val render = Js.wrap_meth_callback (fun this -> class_opts.render ~this)
@@ -307,92 +338,59 @@ let create_class class_opts = let open Js.Optdef in
       |> map (option class_opts.component_will_unmount)
   end)
   in
-  Low_level_bindings.react##createClass comp
+  react##createClass comp
 
 let elem_from_spec spec = create_element_from_class (create_class spec)
 
 let render ~react_elem dom_elem =
-  Low_level_bindings.react_dom##render react_elem dom_elem
+  react_dom##render react_elem dom_elem
 
+let string_of_tag tag =
+  (Types.show_tag tag |> Js.string)##substring_toEnd 1 |> Js.to_string
 
-let (react, react_dom, react_dom_server) =
-  Low_level_bindings.react,
-  Low_level_bindings.react_dom,
-  Low_level_bindings.react_dom_server
-
-module DOM = struct
-
-  type tag = [`a | `abbr | `address | `area | `article | `aside | `audio |
-              `b | `base | `bdi | `bdo | `big | `blockquote | `body |
-              `br | `button | `canvas | `caption | `cite | `code |
-              `col | `colgroup | `data | `datalist | `dd | `del |
-              `details | `dfn | `dialog | `div | `dl | `dt | `em |
-              `emded | `fieldset | `figcaption | `figure | `footer |
-              `form | `h1 | `h2 | `h3 | `h4 | `h5 | `h6 | `head | `header |
-              `hgroup | `hr | `html | `i | `iframe | `img | `input |
-              `ins | `kbd | `keygen | `label | `legend | `li | `link |
-              `main | `map | `mark | `menu | `menuitem | `meta | `meter |
-              `nav | `noscript |
-              `object_ [@printer fun fmt -> fprintf fmt "`object"] |
-              `ol | `optgroup | `option | `output | `p | `param | `picture |
-              `pre | `progress | `q | `rp | `rt | `ruby | `s | `samp |
-              `script | `section | `select | `small | `source | `span |
-              `strong | `style | `sub | `summary | `sup | `table |
-              `tbody | `td | `textarea | `tfoot | `th | `thead |
-              `time | `title | `tr | `track | `u | `ul | `var | `video |
-              `wbr | `circle | `clipPath | `defs | `ellipse | `g |
-              `image | `line | `linearGradient | `mask | `path |
-              `pattern | `polygon | `polyline | `radialGradient |
-              `rect | `stop | `svg | `text | `tspan ] [@@deriving show]
-
-  let string_of_tag tag =
-    (show_tag tag |> Js.string)##substring_toEnd 1 |> Js.to_string
-
-  type 'a elem_spec =
-    (<className: Js.js_string Js.t Js.readonly_prop; .. > as 'a ) Js.t
 
   let make :
-    ?elem_spec : 'a javascript_object ->
+    ?elem_spec : 'a Types.javascript_object ->
     ?class_name : string ->
-    ?tag:tag ->
-    tree ->
-    Low_level_bindings.react_element Js.t
+    ?tag:Types.tag ->
+    Types.tree ->
+    Bindings.react_element Js.t
     = fun ?elem_spec ?class_name ?(tag=`div) children -> Js.Unsafe.(Infix.(
         let elem_name = tag |> string_of_tag in
         let args = children |> List.map ~f:(function
-            | Elem e -> inject e
-            | Text s -> Js.string s |> inject
+            | Types.Elem e -> inject e
+            | Types.Text s -> Js.string s |> inject
             (* | Fragment l -> *)
           )
         in
         match elem_spec, class_name with
         | None, None ->
           meth_call
-            Low_level_bindings.react##._DOM
+            react##._DOM
             elem_name
             (Array.of_list (inject Js.null :: args))
         | (Some e_spec, None) ->
           meth_call
-            Low_level_bindings.react##._DOM
+            react##._DOM
             elem_name
             (Array.of_list ((inject e_spec) :: args))
         | (Some e_spec, Some c_name) ->
           (* Mutates the elem_spec by making className take
              precedence *)
           meth_call
-            Low_level_bindings.react##._DOM
+            react##._DOM
             elem_name
             (Array.of_list ((inject ([("className", !*c_name)] >>> e_spec)) :: args))
         | (None, Some c_name) ->
           meth_call
-            Low_level_bindings.react##._DOM
+            react##._DOM
             elem_name
             (Array.of_list ((inject (object%js val className = !*c_name end)) :: args))
       ))
 
-end
-
 module Common_components = struct
+
+  open Types
 
   let stylesheet ?custom_opts ~href () = Infix.(
       let attrs = object%js
@@ -402,13 +400,13 @@ module Common_components = struct
       in
       match custom_opts with
         None ->
-        Elem (DOM.make ~elem_spec:attrs ~tag:`link [])
+        Elem (make ~elem_spec:attrs ~tag:`link [])
       | Some custom ->
-        Elem (DOM.make ~elem_spec:(attrs <+> custom) ~tag:`link [])
+        Elem (make ~elem_spec:(attrs <+> custom) ~tag:`link [])
     )
 
   let ahref ?(href="") txt = Infix.(
-      Elem (DOM.make
+      Elem (make
               ~elem_spec:(object%js val href = !*href end)
               ~tag:`a
               [Text txt])
